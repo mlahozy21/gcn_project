@@ -193,6 +193,16 @@ class DeepGCN(nn.Module):
         self.layers.append(GraphConvolution(n_hidden, n_classes))
 
     def forward(self, x: torch.Tensor, adj: torch.sparse.FloatTensor) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Args:
+            x: Input features (N x n_features)
+            adj: Normalized adjacency matrix, sparse (N x N)
+
+        Returns:
+            Log-softmax class scores (N x n_classes)
+        """
         # Dropout on input features
         x = F.dropout(x, self.dropout, training=self.training)
 

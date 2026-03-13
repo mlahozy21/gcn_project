@@ -3,7 +3,6 @@ Dataset loading utilities for Cora, Citeseer, and Pubmed.
 Downloads the Planetoid datasets (Yang et al., 2016) used by Kipf & Welling.
 """
 
-import os
 import pickle
 import urllib.request
 
