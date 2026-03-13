@@ -11,7 +11,10 @@ Usage:
 """
 
 import argparse
+import os
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -40,8 +43,8 @@ def run_single_dataset(dataset_name, data_dir="data"):
     # --- GCN ---
     print(f"\n--- GCN ({N_RUNS} runs) ---")
     gcn_accs = []
-    all_train_losses = []
-    all_val_losses = []
+    first_train_losses = None
+    first_val_losses = None
 
     for run in range(N_RUNS):
         result = train_gcn(
@@ -56,8 +59,9 @@ def run_single_dataset(dataset_name, data_dir="data"):
             verbose=(run == 0),
         )
         gcn_accs.append(result["test_acc"])
-        all_train_losses.append(result["train_losses"])
-        all_val_losses.append(result["val_losses"])
+        if run == 0:
+            first_train_losses = result["train_losses"]
+            first_val_losses = result["val_losses"]
 
     gcn_mean = np.mean(gcn_accs)
     gcn_std = np.std(gcn_accs)
@@ -99,9 +103,10 @@ def run_single_dataset(dataset_name, data_dir="data"):
     print(f"{'='*55}")
 
     # Plot training curves from first GCN run
+    os.makedirs("results", exist_ok=True)
     plot_training_curves(
-        all_train_losses[0], all_val_losses[0],
-        dataset_name, save_path=f"training_{dataset_name}.png"
+        first_train_losses, first_val_losses,
+        dataset_name, save_path=f"results/training_{dataset_name}.png"
     )
 
     return {

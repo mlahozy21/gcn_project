@@ -10,6 +10,10 @@ Reference:
     convolutional networks for semi-supervised learning. AAAI 2018.
 """
 
+import os
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -133,6 +137,7 @@ def print_results_table(results):
 
 
 if __name__ == "__main__":
+    os.makedirs("results", exist_ok=True)
     results = run_oversmoothing_experiment()
     print_results_table(results)
-    plot_oversmoothing(results)
+    plot_oversmoothing(results, save_path="results/oversmoothing.png")

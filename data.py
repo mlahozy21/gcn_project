@@ -141,7 +141,7 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
           f"Classes: {labels.max().item() + 1}")
     print(f"  Train: {len(idx_train)}, Val: {len(idx_val)}, "
           f"Test: {len(idx_test)}")
-    print(f"  Edges: {adj.nnz}")
+    print(f"  Edges: {adj.nnz // 2}")
 
     return adj, features, labels, idx_train, idx_val, idx_test
 
@@ -169,9 +169,8 @@ def build_adjacency(graph_dict: dict, num_nodes: int) -> sp.csr_matrix:
     data = np.ones(len(edges))
 
     adj = sp.coo_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
-    # Make symmetric
-    adj = adj + adj.T
-    adj = adj.minimum(1.0)  # clip to binary
+    # Make symmetric (maximum avoids double-counting existing symmetric edges)
+    adj = adj.maximum(adj.T)
     return adj.tocsr()
 
 

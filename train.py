@@ -76,10 +76,11 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
 
     # L2 regularization on first layer WEIGHTS only (Section 5.2, 6.1 of paper)
     # Not applied to biases or second layer parameters
+    no_decay = [p for name, p in model.named_parameters()
+                if not (name == "gc1.weight")]
     optimizer = optim.Adam([
         {"params": [model.gc1.weight], "weight_decay": weight_decay},
-        {"params": [model.gc1.bias, model.gc2.weight, model.gc2.bias],
-         "weight_decay": 0.0},
+        {"params": no_decay, "weight_decay": 0.0},
     ], lr=lr)
 
     # Training loop with early stopping
@@ -157,12 +158,11 @@ def train_deep_gcn(features, adj, labels, idx_train, idx_val, idx_test,
     model = DeepGCN(n_features, n_hidden, n_classes, n_layers, dropout)
 
     # L2 regularization on first layer WEIGHTS only
-    other_params = [p for i, layer in enumerate(model.layers)
-                    for name, p in layer.named_parameters()
-                    if not (i == 0 and name == "weight")]
+    no_decay = [p for name, p in model.named_parameters()
+                if not (name == "layers.0.weight")]
     optimizer = optim.Adam([
         {"params": [model.layers[0].weight], "weight_decay": weight_decay},
-        {"params": other_params, "weight_decay": 0.0},
+        {"params": no_decay, "weight_decay": 0.0},
     ], lr=lr)
 
     best_val_loss = float("inf")
@@ -170,13 +170,7 @@ def train_deep_gcn(features, adj, labels, idx_train, idx_val, idx_test,
     best_model_state = None
 
     for epoch in range(1, epochs + 1):
-        model.train()
-        optimizer.zero_grad()
-        output = model(features, adj)
-        loss = F.nll_loss(output[idx_train], labels[idx_train])
-        loss.backward()
-        optimizer.step()
-
+        train_epoch(model, optimizer, features, adj, labels, idx_train)
         val_loss, _ = evaluate(model, features, adj, labels, idx_val)
 
         if val_loss < best_val_loss:
@@ -214,10 +208,11 @@ def train_mlp(features, adj, labels, idx_train, idx_val, idx_test,
     model = MLP(n_features, n_hidden, n_classes, dropout)
 
     # Same weight decay strategy: first layer weights only
+    no_decay = [p for name, p in model.named_parameters()
+                if not (name == "fc1.weight")]
     optimizer = optim.Adam([
         {"params": [model.fc1.weight], "weight_decay": weight_decay},
-        {"params": [model.fc1.bias, model.fc2.weight, model.fc2.bias],
-         "weight_decay": 0.0},
+        {"params": no_decay, "weight_decay": 0.0},
     ], lr=lr)
 
     best_val_loss = float("inf")
@@ -225,13 +220,7 @@ def train_mlp(features, adj, labels, idx_train, idx_val, idx_test,
     best_model_state = None
 
     for epoch in range(1, epochs + 1):
-        model.train()
-        optimizer.zero_grad()
-        output = model(features)
-        loss = F.nll_loss(output[idx_train], labels[idx_train])
-        loss.backward()
-        optimizer.step()
-
+        train_epoch(model, optimizer, features, adj, labels, idx_train)
         val_loss, _ = evaluate(model, features, adj, labels, idx_val)
 
         if val_loss < best_val_loss:
