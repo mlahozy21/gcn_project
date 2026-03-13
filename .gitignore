@@ -24,3 +24,10 @@ logs/
 
 # Variables de entorno
 .env
+
+# LaTeX (compilados, solo se sube el PDF)
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.log
+report/*.out

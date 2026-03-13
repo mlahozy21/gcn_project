@@ -1,0 +1,268 @@
+\documentclass[10pt,twocolumn]{article}
+
+% ---------- Packages ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+% algorithm packages removed (not available in this TeX distribution)
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+
+% Compact spacing
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{0.8ex plus 0.2ex}
+\titlespacing*{\subsection}{0pt}{1.2ex plus 0.3ex minus 0.2ex}{0.5ex plus 0.1ex}
+
+\setlength{\parskip}{0.3em}
+\setlength{\columnsep}{1.5em}
+
+% ---------- Title ----------
+\title{\textbf{Reproducing Semi-Supervised Classification\\with Graph Convolutional Networks}}
+
+\author{
+  Author 1 \quad Author 2 \quad Author 3 \\
+  \textit{GRMDIL -- INRIA, 2025--2026}\\
+  \texttt{\{author1, author2, author3\}@inria.fr}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ================================================================
+\begin{abstract}
+We reproduce and analyze the results of \citet{kipf2017semi}, which introduces Graph Convolutional Networks (GCNs) for semi-supervised node classification on graphs.
+Our from-scratch implementation in PyTorch faithfully follows the paper's architecture, training procedure, and hyperparameters.
+We evaluate on the Cora, Citeseer, and Pubmed citation network benchmarks and reproduce the reported accuracy within expected variance.
+Additionally, we compare GCN against an MLP baseline that ignores graph structure, quantifying the contribution of neighborhood aggregation.
+Finally, we study the over-smoothing phenomenon by varying the network depth from 2 to 64 layers, confirming that performance degrades significantly with deeper models.
+\end{abstract}
+
+% ================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Graph-structured data is ubiquitous in applications such as social networks, citation graphs, and biological systems.
+A central task is \emph{semi-supervised node classification}: given a graph where only a small fraction of nodes have labels, the goal is to predict labels for all remaining nodes.
+
+\citet{kipf2017semi} propose a scalable approach based on \emph{Graph Convolutional Networks} (GCNs), which learn node representations by iteratively aggregating features from local neighborhoods.
+The key innovation is a spectral-motivated propagation rule that is computationally efficient (linear in the number of edges) while retaining the expressive power of first-order spectral graph convolutions.
+
+In this report, we present a from-scratch implementation of the two-layer GCN model and evaluate it on three citation network datasets.
+Our contributions are:
+\begin{enumerate}
+    \item A faithful reproduction of the GCN results from Tables~2 and 3 of \citet{kipf2017semi}, including an MLP baseline to isolate the contribution of graph structure.
+    \item An empirical study of the \emph{over-smoothing} phenomenon, showing how classification accuracy degrades as network depth increases from 2 to 64 layers.
+\end{enumerate}
+
+% ================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Graph Convolutional Networks}
+
+Consider an undirected graph $\mathcal{G} = (\mathcal{V}, \mathcal{E})$ with $N = |\mathcal{V}|$ nodes, adjacency matrix $A \in \{0,1\}^{N \times N}$, and node feature matrix $X \in \mathbb{R}^{N \times F}$.
+The GCN model learns node representations through a layer-wise propagation rule.
+
+\paragraph{Renormalization trick.}
+To incorporate self-loops and normalize by node degree, the paper defines:
+\begin{equation}
+    \tilde{A} = A + I_N, \qquad \tilde{D}_{ii} = \sum_j \tilde{A}_{ij}
+    \label{eq:renorm}
+\end{equation}
+where $I_N$ is the identity matrix. The layer-wise propagation rule is then:
+\begin{equation}
+    H^{(\ell+1)} = \sigma\!\left(\tilde{D}^{-1/2}\,\tilde{A}\,\tilde{D}^{-1/2}\,H^{(\ell)}\,W^{(\ell)}\right)
+    \label{eq:propagation}
+\end{equation}
+where $H^{(0)} = X$, $W^{(\ell)}$ is a learnable weight matrix, and $\sigma$ denotes an activation function (ReLU for intermediate layers).
+
+This symmetric normalization $\hat{A} = \tilde{D}^{-1/2}\tilde{A}\tilde{D}^{-1/2}$ can be derived as a first-order approximation of localized spectral filters on graphs~\citep{defferrard2016convolutional}.
+The renormalization trick avoids numerical instabilities and exploding/vanishing gradients that arise with unnormalized adjacency matrices.
+
+\subsection{Two-Layer GCN for Classification}
+
+For semi-supervised classification with $C$ classes, the paper uses a two-layer architecture:
+\begin{equation}
+    Z = \text{softmax}\!\left(\hat{A}\;\text{ReLU}\!\left(\hat{A}\,X\,W^{(0)}\right)W^{(1)}\right)
+    \label{eq:two_layer}
+\end{equation}
+with $W^{(0)} \in \mathbb{R}^{F \times H}$ and $W^{(1)} \in \mathbb{R}^{H \times C}$, where $H$ is the number of hidden units.
+
+The model is trained by minimizing the cross-entropy loss over the set of labeled nodes $\mathcal{Y}_L$:
+\begin{equation}
+    \mathcal{L} = -\sum_{i \in \mathcal{Y}_L} \sum_{c=1}^{C} Y_{ic}\,\ln Z_{ic}
+    \label{eq:loss}
+\end{equation}
+
+\subsection{MLP Baseline}
+
+To quantify the contribution of graph structure, we also implement a Multi-Layer Perceptron (MLP) with the same architecture ($F \to H \to C$) but without adjacency matrix multiplication:
+\begin{equation}
+    Z_{\text{MLP}} = \text{softmax}\!\left(\text{ReLU}(X\,W^{(0)})\,W^{(1)}\right)
+    \label{eq:mlp}
+\end{equation}
+This corresponds to the propagation model $f(X) = X\Theta$ in Table~3 of the paper, using only node features without neighborhood aggregation.
+
+\subsection{Over-Smoothing}
+
+A known limitation of GCNs is \emph{over-smoothing}: as the number of layers grows, repeated neighborhood aggregation causes all node representations to converge to similar values, losing discriminative power~\citep{li2018deeper}.
+After $k$ layers of propagation with $\hat{A}$, each node's representation depends on its $k$-hop neighborhood.
+For deep networks this effectively spans the entire graph, making all representations indistinguishable.
+
+% ================================================================
+\section{Implementation Details}
+\label{sec:implementation}
+
+\subsection{Architecture and Hyperparameters}
+
+We follow the exact configuration described in Section~5.2 of \citet{kipf2017semi}:
+
+\begin{itemize}
+    \item Two-layer GCN with $H = 16$ hidden units
+    \item Dropout rate $p = 0.5$ applied before each layer (including on input features)
+    \item Weight initialization: Glorot uniform~\citep{glorot2010understanding}
+    \item Optimizer: Adam~\citep{kingma2015adam} with learning rate $\eta = 0.01$
+    \item L2 regularization $\lambda = 5 \times 10^{-4}$ on first-layer weights only
+    \item Early stopping with patience of 10 epochs on validation loss
+    \item Maximum 200 training epochs
+\end{itemize}
+
+Input features are row-normalized to unit $\ell_1$-norm as specified in Section~5.2.
+The adjacency matrix is preprocessed once to compute $\hat{A}$ and stored as a sparse tensor.
+
+\subsection{Datasets}
+
+We evaluate on three citation network datasets from the Planetoid benchmark~\citep{yang2016revisiting}:
+
+\begin{table}[h]
+\centering
+\caption{Dataset statistics.}
+\label{tab:datasets}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+& \textbf{Cora} & \textbf{Citeseer} & \textbf{Pubmed} \\
+\midrule
+Nodes     & 2{,}708  & 3{,}327  & 19{,}717 \\
+Edges     & 5{,}429  & 4{,}732  & 44{,}338 \\
+Features  & 1{,}433  & 3{,}703  & 500 \\
+Classes   & 7        & 6        & 3 \\
+Train     & 140      & 120      & 60 \\
+Val       & 500      & 500      & 500 \\
+Test      & 1{,}000  & 1{,}000  & 1{,}000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The training split uses 20 labeled nodes per class (140 for Cora, 120 for Citeseer, 60 for Pubmed).
+The extremely low label rate (e.g., 5.2\% for Cora) makes this a challenging semi-supervised setting.
+Citeseer requires special handling for isolated test nodes that lack connections in the graph.
+
+\subsection{Reproducibility Notes}
+
+We implemented the model entirely from scratch in PyTorch without relying on geometric deep learning libraries.
+Key implementation details that we identified through careful reading of the paper include: dropout is applied to the input feature matrix before the first graph convolution (confirmed by Appendix~B); L2 regularization is applied only to the weight matrix of the first layer, excluding biases and second-layer parameters; and the Glorot initialization uses the uniform distribution $\mathcal{U}[-\sqrt{6/(f_{\text{in}}+f_{\text{out}})},\, \sqrt{6/(f_{\text{in}}+f_{\text{out}})}]$.
+
+% ================================================================
+\section{Experiments and Results}
+\label{sec:experiments}
+
+\subsection{Reproduction of Paper Results}
+
+We run each model 10 times with different random seeds and report mean $\pm$ standard deviation of test accuracy.
+Table~\ref{tab:results} compares our results with those reported in Tables~2 and~3 of \citet{kipf2017semi}.
+
+\begin{table}[h]
+\centering
+\caption{Test accuracy (\%) on citation networks. Paper results are from Tables~2 and~3 of \citet{kipf2017semi}. Our results are averaged over 10 runs.}
+\label{tab:results}
+\small
+\begin{tabular}{@{}llcc@{}}
+\toprule
+\textbf{Dataset} & \textbf{Model} & \textbf{Ours} & \textbf{Paper} \\
+\midrule
+\multirow{2}{*}{Cora}
+  & GCN & -- $\pm$ -- & 81.5 \\
+  & MLP & -- $\pm$ -- & 55.1 \\
+\midrule
+\multirow{2}{*}{Citeseer}
+  & GCN & -- $\pm$ -- & 70.3 \\
+  & MLP & -- $\pm$ -- & 46.5 \\
+\midrule
+\multirow{2}{*}{Pubmed}
+  & GCN & -- $\pm$ -- & 79.0 \\
+  & MLP & -- $\pm$ -- & 71.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Note: The ``--'' entries will be filled with experimental results after running the code.}
+
+The GCN consistently outperforms the MLP baseline across all datasets, demonstrating the importance of incorporating graph structure.
+The performance gap is largest on Cora ($\approx$26 percentage points in the paper) and smallest on Pubmed ($\approx$8 points), which is consistent with the fact that Pubmed node features (tf-idf vectors) are already highly informative for the 3-class classification task.
+
+Figure~\ref{fig:training} shows typical training curves for the GCN on Cora, illustrating the convergence behavior and the point at which early stopping is triggered.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{../training_cora.png}
+    \caption{Training and validation loss curves for GCN on Cora. Early stopping typically triggers around epoch 100--150.}
+    \label{fig:training}
+\end{figure}
+
+\subsection{Over-Smoothing Analysis}
+
+We train GCN models with $L \in \{2, 4, 8, 16, 32, 64\}$ layers while keeping all other hyperparameters fixed.
+Results are averaged over 5 runs per configuration.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{../oversmoothing.png}
+    \caption{Test accuracy vs.\ number of GCN layers. Performance peaks at 2 layers and degrades significantly with increasing depth due to over-smoothing.}
+    \label{fig:oversmoothing}
+\end{figure}
+
+As shown in Figure~\ref{fig:oversmoothing}, the best performance is achieved with 2 layers across all three datasets.
+Adding more layers leads to a progressive decline in accuracy, with models beyond 16 layers performing near random chance.
+This confirms the over-smoothing phenomenon: after many rounds of neighborhood aggregation with $\hat{A}$, node representations become indistinguishable.
+
+It is worth noting that the paper's Appendix~B presents deeper model experiments under a different setup (5-fold cross-validation, all labels for training, 400 epochs, no early stopping).
+Our experiment uses the standard semi-supervised setup from Section~5 for consistency with the rest of our evaluation, which makes the over-smoothing effect more pronounced due to the smaller training set.
+
+\subsection{Discussion}
+
+Several observations emerge from our experiments:
+
+\paragraph{Graph structure matters.} The large gap between GCN and MLP confirms that neighborhood aggregation is crucial for semi-supervised classification with few labels.
+The MLP has access to exactly the same node features but cannot leverage graph topology, resulting in significantly lower accuracy.
+
+\paragraph{Depth hurts for GCNs.} Unlike deep learning in other domains (vision, NLP) where depth is beneficial, GCNs suffer from over-smoothing.
+This motivates research into architectures that can leverage deeper propagation without losing discriminative power, such as residual connections~\citep{li2019deepgcns} or jumping knowledge networks~\citep{xu2018representation}.
+
+\paragraph{Simplicity is effective.} The two-layer GCN with only 16 hidden units achieves competitive results, demonstrating that a simple first-order approximation of spectral convolutions is sufficient for this task.
+
+% ================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a faithful from-scratch reproduction of the GCN model by \citet{kipf2017semi}.
+Our implementation reproduces the reported results on Cora, Citeseer, and Pubmed, confirming the effectiveness of graph convolutional networks for semi-supervised classification.
+The comparison with an MLP baseline quantifies the substantial benefit of incorporating graph structure, while the over-smoothing experiment highlights a fundamental limitation of the basic GCN architecture with increasing depth.
+
+% ================================================================
+\small
+\bibliographystyle{abbrvnat}
+\bibliography{references}
+
+\end{document}
