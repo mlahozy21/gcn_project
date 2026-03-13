@@ -67,7 +67,8 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
         verbose: Print progress (default: True)
 
     Returns:
-        dict with test_acc, val_acc, train_acc, train_losses, val_losses
+        dict with test_acc, val_acc, train_acc, train_losses, val_losses,
+        training_time, epochs_trained
     """
     n_features = features.shape[1]
     n_classes = labels.max().item() + 1
@@ -124,7 +125,7 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    test_loss, test_acc = evaluate(model, features, adj, labels, idx_test)
+    _, test_acc = evaluate(model, features, adj, labels, idx_test)
     _, val_acc = evaluate(model, features, adj, labels, idx_val)
     _, train_acc = evaluate(model, features, adj, labels, idx_train)
 

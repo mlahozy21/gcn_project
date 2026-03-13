@@ -41,7 +41,8 @@ def download_dataset(dataset_name: str, data_dir: str = "data") -> str:
                     urllib.request.urlretrieve(url, filepath)
                     downloaded = True
                     break
-                except Exception:
+                except Exception as e:
+                    print(f"  Warning: {base_url} failed ({e})")
                     continue
             if not downloaded:
                 raise RuntimeError(
@@ -94,12 +95,12 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
     if dataset_name == "citeseer":
         # Citeseer has some isolated test nodes not in the graph.
         # We fill them with zero features and assign a random label.
-        test_idx_range_full = range(min(test_idx), max(test_idx) + 1)
-        tx_extended = sp.lil_matrix((len(test_idx_range_full), x.shape[1]))
+        n_test_full = max(test_idx) - min(test_idx) + 1
+        tx_extended = sp.lil_matrix((n_test_full, x.shape[1]))
         tx_extended[test_idx_sorted - min(test_idx_sorted), :] = tx
         tx = tx_extended.tocsr()
 
-        ty_extended = np.zeros((len(test_idx_range_full), y.shape[1]))
+        ty_extended = np.zeros((n_test_full, y.shape[1]))
         ty_extended[test_idx_sorted - min(test_idx_sorted), :] = ty
         ty = ty_extended
 
@@ -183,8 +184,9 @@ def normalize_adjacency(adj: sp.csr_matrix) -> torch.sparse.FloatTensor:
     Returns a torch sparse tensor.
     """
     # Add self-loops: A_tilde = A + I
+    # Remove any existing diagonal first to avoid doubling self-loops
     num_nodes = adj.shape[0]
-    adj_tilde = adj + sp.eye(num_nodes)
+    adj_tilde = adj - sp.diags(adj.diagonal()) + sp.eye(num_nodes)
 
     # Compute D_tilde^{-1/2}
     degree = np.array(adj_tilde.sum(axis=1)).flatten()
