@@ -19,5 +19,10 @@ python experiments.py
 --- DESACTIVAR ENTORNO VIRTUAL ---
 deactivate
 
+--- SUBIR CAMBIOS A GITHUB ---
+git add .
+git commit -m "descripción del cambio"
+git push
+
 --- INSTALAR DEPENDENCIAS (solo si es necesario) ---
 pip install -r requirements.txt

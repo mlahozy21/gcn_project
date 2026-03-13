@@ -1,0 +1,26 @@
+# Entorno virtual
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Datos descargados (se regeneran automáticamente)
+data/
+
+# Resultados y logs
+results/
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs
+.vscode/
+.idea/
+
+# Variables de entorno
+.env
