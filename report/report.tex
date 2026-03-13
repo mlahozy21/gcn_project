@@ -155,7 +155,7 @@ We evaluate on three citation network datasets from the Planetoid benchmark~\cit
 & \textbf{Cora} & \textbf{Citeseer} & \textbf{Pubmed} \\
 \midrule
 Nodes     & 2{,}708  & 3{,}327  & 19{,}717 \\
-Edges     & 5{,}429  & 4{,}732  & 44{,}338 \\
+Edges     & 5{,}278  & 4{,}614  & 44{,}325 \\
 Features  & 1{,}433  & 3{,}703  & 500 \\
 Classes   & 7        & 6        & 3 \\
 Train     & 140      & 120      & 60 \\
@@ -193,21 +193,19 @@ Table~\ref{tab:results} compares our results with those reported in Tables~2 and
 \textbf{Dataset} & \textbf{Model} & \textbf{Ours} & \textbf{Paper} \\
 \midrule
 \multirow{2}{*}{Cora}
-  & GCN & -- $\pm$ -- & 81.5 \\
-  & MLP & -- $\pm$ -- & 55.1 \\
+  & GCN & 81.6 $\pm$ 0.7 & 81.5 \\
+  & MLP & 56.9 $\pm$ 1.2 & 55.1 \\
 \midrule
 \multirow{2}{*}{Citeseer}
-  & GCN & -- $\pm$ -- & 70.3 \\
-  & MLP & -- $\pm$ -- & 46.5 \\
+  & GCN & 71.3 $\pm$ 0.5 & 70.3 \\
+  & MLP & 55.2 $\pm$ 1.4 & 46.5 \\
 \midrule
 \multirow{2}{*}{Pubmed}
-  & GCN & -- $\pm$ -- & 79.0 \\
-  & MLP & -- $\pm$ -- & 71.4 \\
+  & GCN & 78.6 $\pm$ 0.5 & 79.0 \\
+  & MLP & 72.1 $\pm$ 0.7 & 71.4 \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\textit{Note: The ``--'' entries will be filled with experimental results after running the code.}
 
 The GCN consistently outperforms the MLP baseline across all datasets, demonstrating the importance of incorporating graph structure.
 The performance gap is largest on Cora ($\approx$26 percentage points in the paper) and smallest on Pubmed ($\approx$8 points), which is consistent with the fact that Pubmed node features (tf-idf vectors) are already highly informative for the 3-class classification task.
@@ -216,8 +214,8 @@ Figure~\ref{fig:training} shows typical training curves for the GCN on Cora, ill
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=\linewidth]{../training_cora.png}
-    \caption{Training and validation loss curves for GCN on Cora. Early stopping typically triggers around epoch 100--150.}
+    \includegraphics[width=\linewidth]{../results/training_cora.png}
+    \caption{Training and validation loss curves for GCN on Cora. Early stopping typically triggers around epoch 135--175.}
     \label{fig:training}
 \end{figure}
 
@@ -228,7 +226,7 @@ Results are averaged over 5 runs per configuration.
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=\linewidth]{../oversmoothing.png}
+    \includegraphics[width=\linewidth]{../results/oversmoothing.png}
     \caption{Test accuracy vs.\ number of GCN layers. Performance peaks at 2 layers and degrades significantly with increasing depth due to over-smoothing.}
     \label{fig:oversmoothing}
 \end{figure}
