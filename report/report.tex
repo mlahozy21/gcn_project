@@ -231,9 +231,30 @@ Results are averaged over 5 runs per configuration.
     \label{fig:oversmoothing}
 \end{figure}
 
-As shown in Figure~\ref{fig:oversmoothing}, the best performance is achieved with 2 layers across all three datasets.
-Adding more layers leads to a progressive decline in accuracy, with models beyond 16 layers performing near random chance.
+Table~\ref{tab:oversmoothing} and Figure~\ref{fig:oversmoothing} show that the best performance is achieved with 2 layers across all three datasets.
+Adding more layers leads to a sharp decline in accuracy: on Cora, accuracy drops from 82.2\% at 2 layers to 20.4\% at 16 layers; on Citeseer, from 70.5\% to 17.9\%; on Pubmed, from 79.3\% to 32.8\%.
 This confirms the over-smoothing phenomenon: after many rounds of neighborhood aggregation with $\hat{A}$, node representations become indistinguishable.
+Interestingly, performance stabilizes and even recovers slightly beyond 16 layers on Cora and Pubmed.
+We attribute this to early stopping (patience~=~10): very deep models diverge almost immediately and training halts before full over-smoothing occurs.
+
+\begin{table}[h]
+\centering
+\caption{Test accuracy (\%) vs.\ number of layers (mean $\pm$ std over 5 runs).}
+\label{tab:oversmoothing}
+\small
+\begin{tabular}{@{}rccc@{}}
+\toprule
+\textbf{Layers} & \textbf{Cora} & \textbf{Citeseer} & \textbf{Pubmed} \\
+\midrule
+2  & 82.2 $\pm$ 0.2 & 70.5 $\pm$ 1.0 & 79.3 $\pm$ 0.5 \\
+4  & 66.6 $\pm$ 7.4 & 57.1 $\pm$ 7.9 & 72.8 $\pm$ 6.0 \\
+8  & 29.8 $\pm$ 6.0 & 21.4 $\pm$ 4.3 & 47.1 $\pm$ 4.5 \\
+16 & 20.4 $\pm$ 7.7 & 19.1 $\pm$ 2.5 & 32.8 $\pm$ 9.0 \\
+32 & 20.7 $\pm$ 8.4 & 17.9 $\pm$ 1.5 & 35.3 $\pm$ 9.0 \\
+64 & 27.5 $\pm$ 4.0 & 17.9 $\pm$ 2.8 & 35.8 $\pm$ 9.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 It is worth noting that the paper's Appendix~B presents deeper model experiments under a different setup (5-fold cross-validation, all labels for training, 400 epochs, no early stopping).
 Our experiment uses the standard semi-supervised setup from Section~5 for consistency with the rest of our evaluation, which makes the over-smoothing effect more pronounced due to the smaller training set.
