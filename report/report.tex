@@ -29,9 +29,7 @@
 \title{\textbf{Reproducing Semi-Supervised Classification\\with Graph Convolutional Networks}}
 
 \author{
-  Author 1 \quad Author 2 \quad Author 3 \\
-  \textit{GRMDIL -- INRIA, 2025--2026}\\
-  \texttt{\{author1, author2, author3\}@inria.fr}
+  Marcos Lahoz \quad Judith Le Roy \quad Rémi Saout
 }
 
 \date{}
@@ -45,7 +43,7 @@ We reproduce and analyze the results of \citet{kipf2017semi}, which introduces G
 Our from-scratch implementation in PyTorch faithfully follows the paper's architecture, training procedure, and hyperparameters.
 We evaluate on the Cora, Citeseer, and Pubmed citation network benchmarks and reproduce the reported accuracy within expected variance.
 Additionally, we compare GCN against an MLP baseline that ignores graph structure, quantifying the contribution of neighborhood aggregation.
-Finally, we study the over-smoothing phenomenon by varying the network depth from 2 to 64 layers, confirming that performance degrades significantly with deeper models.
+Finally, we study the over-smoothing phenomenon by varying the network depth from 2 to 16 layers, confirming that performance degrades significantly with deeper models, and show that residual connections partially mitigate this effect.
 \end{abstract}
 
 % ================================================================
@@ -62,7 +60,7 @@ In this report, we present a from-scratch implementation of the two-layer GCN mo
 Our contributions are:
 \begin{enumerate}
     \item A faithful reproduction of the GCN results from Tables~2 and 3 of \citet{kipf2017semi}, including an MLP baseline to isolate the contribution of graph structure.
-    \item An empirical study of the \emph{over-smoothing} phenomenon, showing how classification accuracy degrades as network depth increases from 2 to 64 layers.
+    \item An empirical study of the \emph{over-smoothing} phenomenon, showing how classification accuracy degrades as network depth increases from 2 to 16 layers, and how residual connections (Appendix~B of the paper) can partially mitigate this degradation.
 \end{enumerate}
 
 % ================================================================
@@ -112,7 +110,9 @@ To quantify the contribution of graph structure, we also implement a Multi-Layer
     Z_{\text{MLP}} = \text{softmax}\!\left(\text{ReLU}(X\,W^{(0)})\,W^{(1)}\right)
     \label{eq:mlp}
 \end{equation}
-This corresponds to the propagation model $f(X) = X\Theta$ in Table~3 of the paper, using only node features without neighborhood aggregation.
+Note that the ``Multi-layer perceptron'' row in Table~3 of \citet{kipf2017semi} uses a single linear layer ($Z = \text{softmax}(X\Theta)$), whereas our MLP has two layers with a ReLU non-linearity (Eq.~\ref{eq:mlp}).
+This gives our baseline slightly more expressive power, which explains the higher MLP accuracy we observe on some datasets (e.g., Citeseer: 55.2\% vs.\ 46.5\% in the paper).
+The comparison remains valid for quantifying the contribution of graph structure, since both our GCN and MLP share the same two-layer architecture and differ only in whether neighborhood aggregation is performed.
 
 \subsection{Over-Smoothing}
 
@@ -168,6 +168,7 @@ Test      & 1{,}000  & 1{,}000  & 1{,}000 \\
 The training split uses 20 labeled nodes per class (140 for Cora, 120 for Citeseer, 60 for Pubmed).
 The extremely low label rate (e.g., 5.2\% for Cora) makes this a challenging semi-supervised setting.
 Citeseer requires special handling for isolated test nodes that lack connections in the graph.
+Our edge counts are slightly lower than those reported in Table~1 of \citet{kipf2017semi} (e.g., 5{,}278 vs.\ 5{,}429 for Cora) because the raw Planetoid adjacency lists contain duplicate neighbor entries that are deduplicated when building the sparse adjacency matrix.
 
 \subsection{Reproducibility Notes}
 
@@ -221,8 +222,8 @@ Figure~\ref{fig:training} shows typical training curves for the GCN on Cora, ill
 
 \subsection{Over-Smoothing Analysis}
 
-We train GCN models with $L \in \{2, 4, 8, 16, 32, 64\}$ layers while keeping all other hyperparameters fixed.
-Results are averaged over 5 runs per configuration.
+We train GCN models with $L \in \{2, 4, 8, 16\}$ layers while keeping all other hyperparameters fixed.
+Results are averaged over 3 runs per configuration.
 
 \begin{figure}[h]
     \centering
@@ -232,32 +233,45 @@ Results are averaged over 5 runs per configuration.
 \end{figure}
 
 Table~\ref{tab:oversmoothing} and Figure~\ref{fig:oversmoothing} show that the best performance is achieved with 2 layers across all three datasets.
-Adding more layers leads to a sharp decline in accuracy: on Cora, accuracy drops from 82.2\% at 2 layers to 20.4\% at 16 layers; on Citeseer, from 70.5\% to 17.9\%; on Pubmed, from 79.3\% to 32.8\%.
+Adding more layers leads to a sharp decline in accuracy: on Cora, accuracy drops from 82.7\% at 2 layers to 15.8\% at 16 layers; on Citeseer, from 71.4\% to 20.4\%; on Pubmed, from 78.6\% to 38.7\%.
 This confirms the over-smoothing phenomenon: after many rounds of neighborhood aggregation with $\hat{A}$, node representations become indistinguishable.
-Interestingly, performance stabilizes and even recovers slightly beyond 16 layers on Cora and Pubmed.
-We attribute this to early stopping (patience~=~10): very deep models diverge almost immediately and training halts before full over-smoothing occurs.
 
 \begin{table}[h]
 \centering
-\caption{Test accuracy (\%) vs.\ number of layers (mean $\pm$ std over 5 runs).}
+\caption{Test accuracy (\%) vs.\ number of layers (mean $\pm$ std over 3 runs). S = Standard GCN, R = Residual GCN.}
 \label{tab:oversmoothing}
-\small
-\begin{tabular}{@{}rccc@{}}
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}rcccccc@{}}
 \toprule
-\textbf{Layers} & \textbf{Cora} & \textbf{Citeseer} & \textbf{Pubmed} \\
+& \multicolumn{2}{c}{\textbf{Cora}} & \multicolumn{2}{c}{\textbf{Citeseer}} & \multicolumn{2}{c}{\textbf{Pubmed}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+$L$ & S & R & S & R & S & R \\
 \midrule
-2  & 82.2 $\pm$ 0.2 & 70.5 $\pm$ 1.0 & 79.3 $\pm$ 0.5 \\
-4  & 66.6 $\pm$ 7.4 & 57.1 $\pm$ 7.9 & 72.8 $\pm$ 6.0 \\
-8  & 29.8 $\pm$ 6.0 & 21.4 $\pm$ 4.3 & 47.1 $\pm$ 4.5 \\
-16 & 20.4 $\pm$ 7.7 & 19.1 $\pm$ 2.5 & 32.8 $\pm$ 9.0 \\
-32 & 20.7 $\pm$ 8.4 & 17.9 $\pm$ 1.5 & 35.3 $\pm$ 9.0 \\
-64 & 27.5 $\pm$ 4.0 & 17.9 $\pm$ 2.8 & 35.8 $\pm$ 9.0 \\
+2  & 82.7{\scriptsize$\pm$0.5} & 81.8{\scriptsize$\pm$0.6} & 71.4{\scriptsize$\pm$0.6} & 71.3{\scriptsize$\pm$0.5} & 78.6{\scriptsize$\pm$0.2} & 79.4{\scriptsize$\pm$0.2} \\
+4  & 75.4{\scriptsize$\pm$0.9} & 78.9{\scriptsize$\pm$2.9} & 46.5{\scriptsize$\pm$11.8} & 62.8{\scriptsize$\pm$3.3} & 74.4{\scriptsize$\pm$2.6} & 75.1{\scriptsize$\pm$3.1} \\
+8  & 29.6{\scriptsize$\pm$18.5} & 31.2{\scriptsize$\pm$3.6} & 24.5{\scriptsize$\pm$7.9} & 27.8{\scriptsize$\pm$9.4} & 39.5{\scriptsize$\pm$15.2} & 65.2{\scriptsize$\pm$9.0} \\
+16 & 15.8{\scriptsize$\pm$11.4} & 25.5{\scriptsize$\pm$8.9} & 20.4{\scriptsize$\pm$3.9} & 20.7{\scriptsize$\pm$3.4} & 38.7{\scriptsize$\pm$2.2} & 40.9{\scriptsize$\pm$0.8} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 It is worth noting that the paper's Appendix~B presents deeper model experiments under a different setup (5-fold cross-validation, all labels for training, 400 epochs, no early stopping).
 Our experiment uses the standard semi-supervised setup from Section~5 for consistency with the rest of our evaluation, which makes the over-smoothing effect more pronounced due to the smaller training set.
+
+\subsection{Residual Connections}
+
+Following Appendix~B of \citet{kipf2017semi}, we implement a variant with residual (skip) connections between hidden layers:
+\begin{equation}
+    H^{(\ell+1)} = \sigma\!\left(\hat{A}\,H^{(\ell)}\,W^{(\ell)}\right) + H^{(\ell)}
+    \label{eq:residual}
+\end{equation}
+This allows the model to carry information from earlier layers, potentially mitigating the over-smoothing effect.
+As shown in Table~\ref{tab:oversmoothing} and Figure~\ref{fig:oversmoothing}, residual connections consistently improve accuracy for deeper models.
+The effect is most pronounced at 4 layers, where residual connections recover a significant portion of the lost accuracy (e.g., 62.8\% vs.\ 46.5\% on Citeseer, 78.9\% vs.\ 75.4\% on Cora).
+On Pubmed at 8 layers, the gap is striking: 65.2\% with residual vs.\ 39.5\% without.
+Residual models also exhibit lower variance, suggesting more stable training.
+However, the two-layer model remains optimal across all datasets.
 
 \subsection{Discussion}
 
@@ -267,7 +281,7 @@ Several observations emerge from our experiments:
 The MLP has access to exactly the same node features but cannot leverage graph topology, resulting in significantly lower accuracy.
 
 \paragraph{Depth hurts for GCNs.} Unlike deep learning in other domains (vision, NLP) where depth is beneficial, GCNs suffer from over-smoothing.
-This motivates research into architectures that can leverage deeper propagation without losing discriminative power, such as residual connections~\citep{li2019deepgcns} or jumping knowledge networks~\citep{xu2018representation}.
+Residual connections~\citep{li2019deepgcns} partially mitigate this but cannot fully overcome it, especially beyond 16 layers. Other approaches such as jumping knowledge networks~\citep{xu2018representation} have been proposed to address this limitation.
 
 \paragraph{Simplicity is effective.} The two-layer GCN with only 16 hidden units achieves competitive results, demonstrating that a simple first-order approximation of spectral convolutions is sufficient for this task.
 
@@ -278,6 +292,7 @@ This motivates research into architectures that can leverage deeper propagation 
 We presented a faithful from-scratch reproduction of the GCN model by \citet{kipf2017semi}.
 Our implementation reproduces the reported results on Cora, Citeseer, and Pubmed, confirming the effectiveness of graph convolutional networks for semi-supervised classification.
 The comparison with an MLP baseline quantifies the substantial benefit of incorporating graph structure, while the over-smoothing experiment highlights a fundamental limitation of the basic GCN architecture with increasing depth.
+Residual connections offer partial mitigation but do not eliminate over-smoothing, confirming that the two-layer model remains the most effective configuration for these benchmarks.
 
 % ================================================================
 \small

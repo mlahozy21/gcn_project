@@ -3,6 +3,7 @@ Dataset loading utilities for Cora, Citeseer, and Pubmed.
 Downloads the Planetoid datasets (Yang et al., 2016) used by Kipf & Welling.
 """
 
+import os
 import pickle
 import urllib.request
 
@@ -19,6 +20,9 @@ BASE_URLS = [
 DATASET_FILES = [
     "x", "y", "tx", "ty", "allx", "ally", "graph", "test.index"
 ]
+
+# Auto-detect device
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def download_dataset(dataset_name: str, data_dir: str = "data") -> str:
@@ -67,11 +71,11 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
 
     Returns:
         adj: scipy sparse adjacency matrix (N x N)
-        features: torch.FloatTensor (N x F)
-        labels: torch.LongTensor (N,)
-        idx_train: torch.LongTensor - training node indices
-        idx_val: torch.LongTensor - validation node indices
-        idx_test: torch.LongTensor - test node indices
+        features: torch.FloatTensor (N x F) on DEVICE
+        labels: torch.LongTensor (N,) on DEVICE
+        idx_train: torch.LongTensor on DEVICE
+        idx_val: torch.LongTensor on DEVICE
+        idx_test: torch.LongTensor on DEVICE
     """
     dataset_name = dataset_name.lower()
     dataset_dir = download_dataset(dataset_name, data_dir)
@@ -92,8 +96,6 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
 
     # Handle Citeseer isolated nodes (some test indices are missing)
     if dataset_name == "citeseer":
-        # Citeseer has some isolated test nodes not in the graph.
-        # We fill them with zero features and assign a random label.
         n_test_full = max(test_idx) - min(test_idx) + 1
         tx_extended = sp.lil_matrix((n_test_full, x.shape[1]))
         tx_extended[test_idx_sorted - min(test_idx_sorted), :] = tx
@@ -105,9 +107,7 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
 
     # Stack features: allx (train+unlabeled) and tx (test)
     features = sp.vstack([allx, tx]).tolil()
-    # Reorder test features to match original ordering
     features[test_idx, :] = features[test_idx_sorted, :]
-    features = features.toarray()
 
     # Stack labels
     labels = np.vstack([ally, ty])
@@ -118,23 +118,20 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
     num_nodes = features.shape[0]
     adj = build_adjacency(graph, num_nodes)
 
-    # Standard splits from Kipf & Welling:
-    # Training: first labeled nodes (20 per class)
-    # Validation: indices 200-699 (500 nodes)
-    # Test: indices 1000-2707 for Cora (1000 nodes)
-    idx_train = list(range(len(y)))  # labeled training nodes
+    # Standard splits from Kipf & Welling
+    idx_train = list(range(len(y)))
     idx_val = list(range(len(y), len(y) + 500))
     idx_test = test_idx
 
-    # Row-normalize features (as described in Section 5.2 of Kipf & Welling)
-    features = row_normalize(features)
+    # Row-normalize features (sparse)
+    features = row_normalize_sparse(features.tocsr())
 
-    # Convert to torch tensors
-    features = torch.FloatTensor(features)
-    labels = torch.LongTensor(labels)
-    idx_train = torch.LongTensor(idx_train)
-    idx_val = torch.LongTensor(idx_val)
-    idx_test = torch.LongTensor(idx_test)
+    # Convert to sparse torch tensor
+    features = scipy_sparse_to_torch(features).to(DEVICE)
+    labels = torch.LongTensor(labels).to(DEVICE)
+    idx_train = torch.LongTensor(idx_train).to(DEVICE)
+    idx_val = torch.LongTensor(idx_val).to(DEVICE)
+    idx_test = torch.LongTensor(idx_test).to(DEVICE)
 
     print(f"Dataset: {dataset_name}")
     print(f"  Nodes: {num_nodes}, Features: {features.shape[1]}, "
@@ -142,19 +139,25 @@ def load_dataset(dataset_name: str, data_dir: str = "data"):
     print(f"  Train: {len(idx_train)}, Val: {len(idx_val)}, "
           f"Test: {len(idx_test)}")
     print(f"  Edges: {adj.nnz // 2}")
+    print(f"  Device: {DEVICE}")
 
     return adj, features, labels, idx_train, idx_val, idx_test
 
 
-def row_normalize(matrix: np.ndarray) -> np.ndarray:
-    """
-    Row-normalize a feature matrix: each row is divided by its L1 norm.
-    This is the preprocessing step described in Section 5.2 of Kipf & Welling.
-    """
+def row_normalize_sparse(matrix: sp.csr_matrix) -> sp.csr_matrix:
+    """Row-normalize a sparse feature matrix: each row divided by its L1 norm."""
     row_sum = np.array(matrix.sum(axis=1)).flatten()
     row_sum_inv = np.where(row_sum > 0, 1.0 / row_sum, 0.0)
-    # Multiply each row by its inverse sum
-    return matrix * row_sum_inv[:, np.newaxis]
+    D_inv = sp.diags(row_sum_inv)
+    return D_inv @ matrix
+
+
+def scipy_sparse_to_torch(matrix: sp.spmatrix) -> torch.sparse.FloatTensor:
+    """Convert a scipy sparse matrix to a coalesced torch sparse tensor."""
+    coo = matrix.tocoo()
+    indices = torch.LongTensor(np.vstack([coo.row, coo.col]))
+    values = torch.FloatTensor(coo.data)
+    return torch.sparse_coo_tensor(indices, values, torch.Size(coo.shape)).coalesce()
 
 
 def build_adjacency(graph_dict: dict, num_nodes: int) -> sp.csr_matrix:
@@ -169,7 +172,6 @@ def build_adjacency(graph_dict: dict, num_nodes: int) -> sp.csr_matrix:
     data = np.ones(len(edges))
 
     adj = sp.coo_matrix((data, (row, col)), shape=(num_nodes, num_nodes))
-    # Make symmetric (maximum avoids double-counting existing symmetric edges)
     adj = adj.maximum(adj.T)
     return adj.tocsr()
 
@@ -178,30 +180,25 @@ def normalize_adjacency(adj: sp.csr_matrix) -> torch.sparse.FloatTensor:
     """
     Compute the normalized adjacency with self-loops:
         A_hat = D_tilde^{-1/2} A_tilde D_tilde^{-1/2}
-    where A_tilde = A + I (renormalization trick from Kipf & Welling).
 
-    Returns a torch sparse tensor.
+    Returns a coalesced torch sparse tensor on DEVICE.
     """
-    # Add self-loops: A_tilde = A + I
-    # Remove any existing diagonal first to avoid doubling self-loops
     num_nodes = adj.shape[0]
     adj_tilde = adj - sp.diags(adj.diagonal()) + sp.eye(num_nodes)
 
-    # Compute D_tilde^{-1/2}
     degree = np.array(adj_tilde.sum(axis=1)).flatten()
     d_inv_sqrt = np.power(degree, -0.5)
     d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.0
     D_inv_sqrt = sp.diags(d_inv_sqrt)
 
-    # Symmetric normalization: D^{-1/2} A D^{-1/2}
     adj_normalized = D_inv_sqrt @ adj_tilde @ D_inv_sqrt
     adj_normalized = adj_normalized.tocoo()
 
-    # Convert to torch sparse tensor
     indices = torch.LongTensor(
         np.vstack([adj_normalized.row, adj_normalized.col])
     )
     values = torch.FloatTensor(adj_normalized.data)
     shape = torch.Size(adj_normalized.shape)
 
-    return torch.sparse_coo_tensor(indices, values, shape)
+    # Coalesce for faster spmm and move to device
+    return torch.sparse_coo_tensor(indices, values, shape).coalesce().to(DEVICE)

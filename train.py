@@ -16,16 +16,17 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 
-from model import GCN, MLP, DeepGCN
+from model import GCN, MLP, DeepGCN, ResidualDeepGCN
+from data import DEVICE
 
 
 def train_epoch(model, optimizer, features, adj, labels, idx_train):
-    """Run one training epoch."""
+    """Run one training epoch. Returns loss and accuracy."""
     model.train()
-    optimizer.zero_grad()
+    optimizer.zero_grad(set_to_none=True)
 
     output = model(features, adj)
-    loss = F.nll_loss(output[idx_train], labels[idx_train])
+    loss = F.cross_entropy(output[idx_train], labels[idx_train])
     loss.backward()
     optimizer.step()
 
@@ -36,15 +37,47 @@ def train_epoch(model, optimizer, features, adj, labels, idx_train):
     return loss.item(), acc
 
 
+def train_epoch_fast(model, optimizer, features, adj, labels, idx_train):
+    """Run one training epoch. Returns loss only (no accuracy computation)."""
+    model.train()
+    optimizer.zero_grad(set_to_none=True)
+
+    output = model(features, adj)
+    loss = F.cross_entropy(output[idx_train], labels[idx_train])
+    loss.backward()
+    optimizer.step()
+
+    return loss.item()
+
+
 @torch.no_grad()
 def evaluate(model, features, adj, labels, idx):
     """Evaluate model on given indices."""
     model.eval()
     output = model(features, adj)
-    loss = F.nll_loss(output[idx], labels[idx]).item()
+    loss = F.cross_entropy(output[idx], labels[idx]).item()
     preds = output[idx].argmax(dim=1)
     acc = (preds == labels[idx]).float().mean().item()
     return loss, acc
+
+
+@torch.no_grad()
+def evaluate_loss_only(model, features, adj, labels, idx):
+    """Evaluate model, returning only loss (faster: skips accuracy)."""
+    model.eval()
+    output = model(features, adj)
+    return F.cross_entropy(output[idx], labels[idx]).item()
+
+
+def _setup_optimizer_first_layer(model, first_layer_weight_name, lr, weight_decay):
+    """Create Adam optimizer with L2 regularization on first layer weights only."""
+    first_weight = dict(model.named_parameters())[first_layer_weight_name]
+    no_decay = [p for name, p in model.named_parameters()
+                if name != first_layer_weight_name]
+    return optim.Adam([
+        {"params": [first_weight], "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ], lr=lr)
 
 
 def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
@@ -52,39 +85,13 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
               epochs=200, patience=10, verbose=True):
     """
     Train a 2-layer GCN with the paper's hyperparameters.
-
-    Args:
-        features: Node features (N x F)
-        adj: Normalized adjacency (sparse tensor)
-        labels: Node labels (N,)
-        idx_train, idx_val, idx_test: Split indices
-        n_hidden: Hidden layer size (default: 16)
-        dropout: Dropout rate (default: 0.5)
-        lr: Learning rate (default: 0.01)
-        weight_decay: L2 regularization (default: 5e-4)
-        epochs: Max training epochs (default: 200)
-        patience: Early stopping patience (default: 10)
-        verbose: Print progress (default: True)
-
-    Returns:
-        dict with test_acc, val_acc, train_acc, train_losses, val_losses,
-        training_time, epochs_trained
     """
     n_features = features.shape[1]
     n_classes = labels.max().item() + 1
 
-    model = GCN(n_features, n_hidden, n_classes, dropout)
+    model = GCN(n_features, n_hidden, n_classes, dropout).to(DEVICE)
+    optimizer = _setup_optimizer_first_layer(model, "gc1.weight", lr, weight_decay)
 
-    # L2 regularization on first layer WEIGHTS only (Section 5.2, 6.1 of paper)
-    # Not applied to biases or second layer parameters
-    no_decay = [p for name, p in model.named_parameters()
-                if not (name == "gc1.weight")]
-    optimizer = optim.Adam([
-        {"params": [model.gc1.weight], "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
-    ], lr=lr)
-
-    # Training loop with early stopping
     best_val_loss = float("inf")
     patience_counter = 0
     best_model_state = None
@@ -107,7 +114,6 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
                   f"Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} | "
                   f"Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
 
-        # Early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -121,7 +127,6 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
 
     training_time = time.time() - t_start
 
-    # Load best model and evaluate on test set
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
@@ -145,89 +150,107 @@ def train_gcn(features, adj, labels, idx_train, idx_val, idx_test,
     }
 
 
-def train_deep_gcn(features, adj, labels, idx_train, idx_val, idx_test,
-                   n_layers=2, n_hidden=16, dropout=0.5, lr=0.01,
-                   weight_decay=5e-4, epochs=200, patience=10, verbose=False):
+def _train_deep_model(model_class, features, adj, labels,
+                      idx_train, idx_val, idx_test,
+                      n_layers=2, n_hidden=16, dropout=0.5, lr=0.01,
+                      weight_decay=5e-4, epochs=200, patience=10,
+                      verbose=False):
     """
-    Train a GCN with variable depth for over-smoothing experiments.
+    Generic training function for deep GCN models (standard or residual).
 
-    Same as train_gcn but uses DeepGCN with configurable number of layers.
+    Uses fast training path: skips accuracy computation during training,
+    only computes validation loss for early stopping.
     """
     n_features = features.shape[1]
     n_classes = labels.max().item() + 1
 
-    model = DeepGCN(n_features, n_hidden, n_classes, n_layers, dropout)
-
-    # L2 regularization on first layer WEIGHTS only
-    no_decay = [p for name, p in model.named_parameters()
-                if not (name == "layers.0.weight")]
-    optimizer = optim.Adam([
-        {"params": [model.layers[0].weight], "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
-    ], lr=lr)
+    model = model_class(n_features, n_hidden, n_classes, n_layers, dropout).to(DEVICE)
+    optimizer = _setup_optimizer_first_layer(model, "layers.0.weight", lr, weight_decay)
 
     best_val_loss = float("inf")
     patience_counter = 0
-    best_model_state = None
+    best_epoch = 0
 
     for epoch in range(1, epochs + 1):
-        train_epoch(model, optimizer, features, adj, labels, idx_train)
-        val_loss, _ = evaluate(model, features, adj, labels, idx_val)
+        # Fast path: no accuracy computation
+        train_epoch_fast(model, optimizer, features, adj, labels, idx_train)
+        val_loss = evaluate_loss_only(model, features, adj, labels, idx_val)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_epoch = epoch
+            # Save best model
+            best_model_state = {k: v.detach().clone()
+                                for k, v in model.state_dict().items()}
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 break
 
-    if best_model_state is not None:
+    if best_epoch > 0:
         model.load_state_dict(best_model_state)
 
     _, test_acc = evaluate(model, features, adj, labels, idx_test)
 
     if verbose:
-        print(f"  {n_layers} layers -> Test Acc: {test_acc:.4f}")
+        label = "residual" if model_class == ResidualDeepGCN else "standard"
+        print(f"  {n_layers} layers ({label}) -> Test Acc: {test_acc:.4f} "
+              f"(best epoch: {best_epoch})")
 
     return test_acc
+
+
+def train_deep_gcn(features, adj, labels, idx_train, idx_val, idx_test,
+                   n_layers=2, n_hidden=16, dropout=0.5, lr=0.01,
+                   weight_decay=5e-4, epochs=200, patience=10, verbose=False):
+    """Train a standard DeepGCN with variable depth."""
+    return _train_deep_model(
+        DeepGCN, features, adj, labels,
+        idx_train, idx_val, idx_test,
+        n_layers=n_layers, n_hidden=n_hidden, dropout=dropout,
+        lr=lr, weight_decay=weight_decay, epochs=epochs,
+        patience=patience, verbose=verbose,
+    )
+
+
+def train_residual_deep_gcn(features, adj, labels, idx_train, idx_val, idx_test,
+                            n_layers=2, n_hidden=16, dropout=0.5, lr=0.01,
+                            weight_decay=5e-4, epochs=200, patience=10,
+                            verbose=False):
+    """Train a ResidualDeepGCN with variable depth."""
+    return _train_deep_model(
+        ResidualDeepGCN, features, adj, labels,
+        idx_train, idx_val, idx_test,
+        n_layers=n_layers, n_hidden=n_hidden, dropout=dropout,
+        lr=lr, weight_decay=weight_decay, epochs=epochs,
+        patience=patience, verbose=verbose,
+    )
 
 
 def train_mlp(features, adj, labels, idx_train, idx_val, idx_test,
               n_hidden=16, dropout=0.5, lr=0.01, weight_decay=5e-4,
               epochs=200, patience=10, verbose=False):
-    """
-    Train a 2-layer MLP baseline (no graph structure).
-
-    Uses the same hyperparameters as the GCN for a fair comparison.
-    Corresponds to the "Multi-layer perceptron" row in Table 3 of the paper.
-    """
+    """Train a 2-layer MLP baseline (no graph structure)."""
     n_features = features.shape[1]
     n_classes = labels.max().item() + 1
 
-    model = MLP(n_features, n_hidden, n_classes, dropout)
-
-    # Same weight decay strategy: first layer weights only
-    no_decay = [p for name, p in model.named_parameters()
-                if not (name == "fc1.weight")]
-    optimizer = optim.Adam([
-        {"params": [model.fc1.weight], "weight_decay": weight_decay},
-        {"params": no_decay, "weight_decay": 0.0},
-    ], lr=lr)
+    model = MLP(n_features, n_hidden, n_classes, dropout).to(DEVICE)
+    optimizer = _setup_optimizer_first_layer(model, "fc1.weight", lr, weight_decay)
 
     best_val_loss = float("inf")
     patience_counter = 0
     best_model_state = None
 
     for epoch in range(1, epochs + 1):
-        train_epoch(model, optimizer, features, adj, labels, idx_train)
-        val_loss, _ = evaluate(model, features, adj, labels, idx_val)
+        train_epoch_fast(model, optimizer, features, adj, labels, idx_train)
+        val_loss = evaluate_loss_only(model, features, adj, labels, idx_val)
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            best_model_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_model_state = {k: v.detach().clone()
+                                for k, v in model.state_dict().items()}
         else:
             patience_counter += 1
             if patience_counter >= patience:

@@ -22,6 +22,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def sparse_dropout(x: torch.Tensor, p: float, training: bool) -> torch.Tensor:
+    """Apply dropout to a sparse tensor by masking non-zero values."""
+    if not training or p == 0:
+        return x
+    mask = torch.rand(x._values().size()) > p
+    indices = x._indices()[:, mask]
+    values = x._values()[mask] / (1 - p)  # scale to preserve expectation
+    return torch.sparse_coo_tensor(indices, values, x.size()).coalesce()
+
+
 class GraphConvolution(nn.Module):
     """
     Single graph convolutional layer.
@@ -54,21 +64,15 @@ class GraphConvolution(nn.Module):
         if self.bias is not None:
             self.bias.data.zero_()
 
-    def forward(self, x: torch.Tensor, adj: torch.sparse.FloatTensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Node feature matrix (N x in_features)
-            adj: Normalized adjacency matrix (N x N, sparse)
-
-        Returns:
-            Output features (N x out_features)
-        """
-        # XW: (N x in_features) @ (in_features x out_features) = (N x out_features)
-        support = torch.mm(x, self.weight)
-        # A_hat @ XW: sparse mm
-        output = torch.spmm(adj, support)
+    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        # XW first: reduces dimension before sparse matmul
+        # Use sparse.mm if input is sparse (first layer with sparse features)
+        if x.is_sparse:
+            support = torch.sparse.mm(x, self.weight)
+        else:
+            support = torch.mm(x, self.weight)
+        # A_hat @ XW: sparse-dense matmul
+        output = torch.sparse.mm(adj, support)
 
         if self.bias is not None:
             output = output + self.bias
@@ -83,14 +87,7 @@ class GCN(nn.Module):
     """
     Two-layer GCN model as described in Kipf & Welling (2017).
 
-    Architecture:
-        Input -> GCN Layer 1 (ReLU + Dropout) -> GCN Layer 2 -> Log-Softmax
-
-    Hyperparameters from the paper:
-        - Hidden units: 16
-        - Dropout: 0.5
-        - Learning rate: 0.01
-        - Weight decay (L2 on first layer): 5e-4
+    Returns raw logits (no log_softmax). Use F.cross_entropy as loss.
     """
 
     def __init__(self, n_features: int, n_hidden: int, n_classes: int,
@@ -100,44 +97,21 @@ class GCN(nn.Module):
         self.gc2 = GraphConvolution(n_hidden, n_classes)
         self.dropout = dropout
 
-    def forward(self, x: torch.Tensor, adj: torch.sparse.FloatTensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Input features (N x n_features)
-            adj: Normalized adjacency (N x N, sparse)
-
-        Returns:
-            Log-probabilities (N x n_classes)
-        """
-        # Dropout on input features (applied before each layer, as in the
-        # original tkipf/gcn implementation and confirmed by Appendix B)
-        x = F.dropout(x, self.dropout, training=self.training)
-
-        # Layer 1: graph convolution + ReLU
+    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        if x.is_sparse:
+            x = sparse_dropout(x, self.dropout, self.training)
+        else:
+            x = F.dropout(x, self.dropout, training=self.training)
         x = self.gc1(x, adj)
         x = F.relu(x)
-
-        # Dropout before layer 2
         x = F.dropout(x, self.dropout, training=self.training)
-
-        # Layer 2: graph convolution + log-softmax
         x = self.gc2(x, adj)
-
-        return F.log_softmax(x, dim=1)
+        return x  # raw logits
 
 
 class MLP(nn.Module):
     """
-    Two-layer Multi-Layer Perceptron baseline (no graph structure).
-
-    This corresponds to the "Multi-layer perceptron" row in Table 3 of
-    Kipf & Welling (2017), where the propagation model is simply XΘ
-    (no adjacency matrix multiplication). This baseline isolates the
-    contribution of the graph structure to classification performance.
-
-    Paper results (Table 3): Citeseer 46.5%, Cora 55.1%, Pubmed 71.4%
+    Two-layer MLP baseline (no graph structure). Returns raw logits.
     """
 
     def __init__(self, n_features: int, n_hidden: int, n_classes: int,
@@ -155,24 +129,21 @@ class MLP(nn.Module):
             layer.weight.data.uniform_(-limit, limit)
             layer.bias.data.zero_()
 
-    def forward(self, x: torch.Tensor, adj: torch.sparse.FloatTensor = None) -> torch.Tensor:
-        """
-        Forward pass. adj is accepted but ignored (for API compatibility).
-        """
+    def forward(self, x: torch.Tensor, adj: torch.Tensor = None) -> torch.Tensor:
+        # MLP needs dense input for nn.Linear
+        if x.is_sparse:
+            x = x.to_dense()
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.fc1(x)
         x = F.relu(x)
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
+        return x  # raw logits
 
 
 class DeepGCN(nn.Module):
     """
-    GCN with variable depth for over-smoothing experiments.
-
-    All hidden layers have the same number of units.
-    ReLU + dropout between each pair of layers.
+    GCN with variable depth for over-smoothing experiments. Returns raw logits.
     """
 
     def __init__(self, n_features: int, n_hidden: int, n_classes: int,
@@ -182,36 +153,60 @@ class DeepGCN(nn.Module):
         self.dropout = dropout
         self.layers = nn.ModuleList()
 
-        # First layer: input -> hidden
         self.layers.append(GraphConvolution(n_features, n_hidden))
-
-        # Intermediate hidden layers
         for _ in range(n_layers - 2):
             self.layers.append(GraphConvolution(n_hidden, n_hidden))
-
-        # Last layer: hidden -> output
         self.layers.append(GraphConvolution(n_hidden, n_classes))
 
-    def forward(self, x: torch.Tensor, adj: torch.sparse.FloatTensor) -> torch.Tensor:
-        """
-        Forward pass.
-
-        Args:
-            x: Input features (N x n_features)
-            adj: Normalized adjacency matrix, sparse (N x N)
-
-        Returns:
-            Log-softmax class scores (N x n_classes)
-        """
-        # Dropout on input features
-        x = F.dropout(x, self.dropout, training=self.training)
-
-        # All layers except last: GCN + ReLU + Dropout
+    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        if x.is_sparse:
+            x = sparse_dropout(x, self.dropout, self.training)
+        else:
+            x = F.dropout(x, self.dropout, training=self.training)
         for layer in self.layers[:-1]:
             x = layer(x, adj)
             x = F.relu(x)
             x = F.dropout(x, self.dropout, training=self.training)
-
-        # Last layer: GCN + log-softmax
         x = self.layers[-1](x, adj)
-        return F.log_softmax(x, dim=1)
+        return x  # raw logits
+
+
+class ResidualDeepGCN(nn.Module):
+    """
+    GCN with residual connections (Eq. 14, Appendix B). Returns raw logits.
+    """
+
+    def __init__(self, n_features: int, n_hidden: int, n_classes: int,
+                 n_layers: int = 2, dropout: float = 0.5):
+        super().__init__()
+        assert n_layers >= 2, "ResidualDeepGCN requires at least 2 layers"
+        self.dropout = dropout
+        self.layers = nn.ModuleList()
+
+        self.layers.append(GraphConvolution(n_features, n_hidden))
+        for _ in range(n_layers - 2):
+            self.layers.append(GraphConvolution(n_hidden, n_hidden))
+        self.layers.append(GraphConvolution(n_hidden, n_classes))
+
+    def forward(self, x: torch.Tensor, adj: torch.Tensor) -> torch.Tensor:
+        if x.is_sparse:
+            x = sparse_dropout(x, self.dropout, self.training)
+        else:
+            x = F.dropout(x, self.dropout, training=self.training)
+
+        # First layer (no residual: dimension change F -> H)
+        x = self.layers[0](x, adj)
+        x = F.relu(x)
+        x = F.dropout(x, self.dropout, training=self.training)
+
+        # Intermediate layers with residual connections
+        for layer in self.layers[1:-1]:
+            residual = x
+            x = layer(x, adj)
+            x = F.relu(x)
+            x = x + residual
+            x = F.dropout(x, self.dropout, training=self.training)
+
+        # Last layer (no residual: dimension change H -> C)
+        x = self.layers[-1](x, adj)
+        return x  # raw logits

@@ -124,7 +124,7 @@ def plot_training_curves(train_losses, val_losses, dataset_name, save_path):
     ax.plot(epochs, val_losses, label="Validation loss", linewidth=2)
 
     ax.set_xlabel("Epoch", fontsize=12)
-    ax.set_ylabel("Loss (NLL)", fontsize=12)
+    ax.set_ylabel("Loss (Cross-Entropy)", fontsize=12)
     ax.set_title(f"Training curves - {dataset_name.capitalize()}", fontsize=13)
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
