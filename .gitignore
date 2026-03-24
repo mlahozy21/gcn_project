@@ -25,6 +25,9 @@ logs/
 # Variables de entorno
 .env
 
+# Notas personales
+comandos.txt
+
 # LaTeX (compilados, solo se sube el PDF)
 report/*.aux
 report/*.bbl
